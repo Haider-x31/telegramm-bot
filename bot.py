@@ -1,140 +1,147 @@
-import os
-import subprocess
-from uuid import uuid4
+import logging
+import yt_dlp
+import time
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    MessageHandler,
-    CommandHandler,
-    CallbackQueryHandler,
-    filters,
-    ContextTypes,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
-TOKEN = "8686945908:AAEfOj2C-MK6oUrjR0Wan-yHBzHU-wPduO8"
-CHANNEL_USERNAME = "@your_channel"  # بدون رابط
+BOT_TOKEN = "PUT_YOUR_TOKEN"
 
-# ------------------ تحقق الاشتراك ------------------
-async def is_subscribed(user_id, context):
-    try:
-        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
-        return False
+users = set()
+referrals = {}
+user_points = {}
+cooldown = {}
 
-async def force_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+logging.basicConfig(level=logging.INFO)
 
-    if not await is_subscribed(user_id, context):
-        keyboard = [
-            [InlineKeyboardButton("📢 اشترك بالقناة", url=f"https://t.me/{CHANNEL_USERNAME.replace('@Gd5bot_bot','')}")],
-            [InlineKeyboardButton("✅ تحقق", callback_data="check_sub")]
-        ]
-        await update.message.reply_text(
-            "❌ لازم تشترك بالقناة حتى تستخدم البوت",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return False
-    return True
+# ⏳ منع السبام
+def is_spam(user_id):
+    now = time.time()
+    if user_id in cooldown:
+        if now - cooldown[user_id] < 10:
+            return True
+    cooldown[user_id] = now
+    return False
 
-# ------------------ تحميل yt-dlp ------------------
-def download_video(url):
-    try:
-        filename = f"{uuid4().hex}.mp4"
-        command = [
-            "yt-dlp",
-            "-f", "mp4",
-            "-o", filename,
-            url
-        ]
-
-        subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        if os.path.exists(filename):
-            return filename
-        return None
-
-    except Exception as e:
-        print("Download Error:", e)
-        return None
-
-# ------------------ START ------------------
+# 🚀 start + نظام الإحالة
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    users.add(user.id)
+
+    # نظام الإحالة
+    if context.args:
+        ref_id = int(context.args[0])
+        if ref_id != user.id:
+            referrals[ref_id] = referrals.get(ref_id, 0) + 1
+            user_points[ref_id] = user_points.get(ref_id, 0) + 1
+
     keyboard = [
-        [InlineKeyboardButton("📥 تحميل فيديو", callback_data="download")],
-        [InlineKeyboardButton("ℹ️ شرح الاستخدام", callback_data="help")],
-        [InlineKeyboardButton("📢 قناتي", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]
+        [InlineKeyboardButton("📥 تحميل فيديو", callback_data="video")],
+        [InlineKeyboardButton("🎵 تحميل صوت", callback_data="audio")],
+        [InlineKeyboardButton("💰 نقاطي", callback_data="points")]
     ]
 
-    await update.message.reply_text(
-        "🔥 أهلاً بك في أقوى بوت تحميل\n\n"
-        "🎬 TikTok + Instagram\n"
-        "⚡ سريع جداً\n\n"
-        "📌 اضغط زر أو أرسل رابط",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    link = f"https://t.me/{context.bot.username}?start={user.id}"
 
-# ------------------ أزرار ------------------
+    text = f"""
+🔥 أهلاً {user.first_name}
+
+🎬 ارسل رابط:
+- TikTok (بدون علامة مائية 😈)
+- Instagram
+- YouTube
+
+💰 رابط الدعوة:
+{link}
+"""
+
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+# 🔘 الأزرار
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "help":
-        await query.message.reply_text(
-            "📌 الاستخدام:\n\n"
-            "1. انسخ رابط الفيديو\n"
-            "2. أرسله للبوت\n"
-            "3. انتظر التحميل\n\n"
-            "🔥 سهل وسريع"
-        )
+    if query.data == "video":
+        context.user_data["mode"] = "video"
+        await query.message.reply_text("📥 ارسل رابط الفيديو")
 
-    elif query.data == "download":
-        await query.message.reply_text("📥 أرسل الرابط الآن")
+    elif query.data == "audio":
+        context.user_data["mode"] = "audio"
+        await query.message.reply_text("🎵 ارسل الرابط لتحويله صوت")
 
-    elif query.data == "check_sub":
+    elif query.data == "points":
         user_id = query.from_user.id
-        if await is_subscribed(user_id, context):
-            await query.message.reply_text("✅ تم التحقق، أرسل الرابط الآن")
-        else:
-            await query.message.reply_text("❌ بعدك ما مشترك")
+        pts = user_points.get(user_id, 0)
+        refs = referrals.get(user_id, 0)
 
-# ------------------ استقبال الروابط ------------------
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await force_subscribe(update, context):
-        return
+        await query.message.reply_text(f"""
+💰 نقاطك: {pts}
+👥 عدد الدعوات: {refs}
+""")
 
+# 📥 التحميل
+async def download(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     url = update.message.text
 
-    if "http" not in url:
-        await update.message.reply_text("❌ أرسل رابط صحيح")
+    if is_spam(user_id):
+        await update.message.reply_text("⏳ استنى 10 ثواني")
         return
 
-    msg = await update.message.reply_text("⏳ جاري التحميل...")
+    mode = context.user_data.get("mode", "video")
 
-    file = download_video(url)
+    await update.message.reply_text("⏳ جاري التحميل...")
 
-    if file:
-        try:
-            with open(file, "rb") as f:
+    try:
+        ydl_opts = {
+            'format': 'best',
+            'outtmpl': 'file.%(ext)s',
+            'noplaylist': True
+        }
+
+        # 🎵 صوت فقط
+        if mode == "audio":
+            ydl_opts.update({
+                'format': 'bestaudio',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                }]
+            })
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            file_path = ydl.prepare_filename(info)
+
+            if mode == "audio":
+                file_path = file_path.rsplit(".", 1)[0] + ".mp3"
+
+        with open(file_path, 'rb') as f:
+            if mode == "audio":
+                await update.message.reply_audio(f)
+            else:
                 await update.message.reply_video(f)
 
-            os.remove(file)
-            await msg.delete()
+    except Exception as e:
+        print(e)
+        await update.message.reply_text("❌ فشل التحميل")
 
-        except Exception as e:
-            print("Send Error:", e)
-            await update.message.reply_text("❌ فشل الإرسال")
+# 📊 عدد المستخدمين
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"👥 المستخدمين: {len(users)}")
 
-    else:
-        await update.message.reply_text("❌ الرابط ما يشتغل أو خاص")
+# 🏁 تشغيل
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# ------------------ تشغيل ------------------
-app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CallbackQueryHandler(buttons))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(buttons))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("🔥 البوت الخرافي شغال")
+    app.run_polling()
 
-print("🔥 البوت شغال احترافي")
-app.run_polling()
+if __name__ == "__main__":
+    main()
