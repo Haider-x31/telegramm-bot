@@ -2,6 +2,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import os
 
+# الصحيح: تجيب التوكن من Variables
 BOT_TOKEN = os.getenv("8686945908:AAH79liYdVN2fj0fj7LQMKXA3R4xZhFQCRg")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
