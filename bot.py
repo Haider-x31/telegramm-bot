@@ -1,147 +1,109 @@
-import logging
-import yt_dlp
-import time
+import os
+import telebot
+from telebot import types
+from openai import OpenAI
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+# ================= CONFIG =================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-BOT_TOKEN = "8686945908:AAEfOj2C-MK6oUrjR0Wan-yHBzHU-wPduO8"
+bot = telebot.TeleBot(BOT_TOKEN)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 users = set()
-referrals = {}
-user_points = {}
-cooldown = {}
+channels = []
+vip_users = set()
 
-logging.basicConfig(level=logging.INFO)
+# ================= START =================
+@bot.message_handler(commands=['start'])
+def start(msg):
+    user_id = msg.from_user.id
+    users.add(user_id)
 
-# ⏳ منع السبام
-def is_spam(user_id):
-    now = time.time()
-    if user_id in cooldown:
-        if now - cooldown[user_id] < 10:
-            return True
-    cooldown[user_id] = now
-    return False
-
-# 🚀 start + نظام الإحالة
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    users.add(user.id)
-
-    # نظام الإحالة
-    if context.args:
-        ref_id = int(context.args[0])
-        if ref_id != user.id:
-            referrals[ref_id] = referrals.get(ref_id, 0) + 1
-            user_points[ref_id] = user_points.get(ref_id, 0) + 1
-
-    keyboard = [
-        [InlineKeyboardButton("📥 تحميل فيديو", callback_data="video")],
-        [InlineKeyboardButton("🎵 تحميل صوت", callback_data="audio")],
-        [InlineKeyboardButton("💰 نقاطي", callback_data="points")]
-    ]
-
-    link = f"https://t.me/{context.bot.username}?start={user.id}"
+    if user_id in vip_users:
+        status = "VIP 👑"
+    else:
+        status = "عادي"
 
     text = f"""
-🔥 أهلاً {user.first_name}
+✨ اهلاً بك في البوت 🔥
 
-🎬 ارسل رابط:
-- TikTok (بدون علامة مائية 😈)
-- Instagram
-- YouTube
+👤 ID: {user_id}
+⭐ الحالة: {status}
 
-💰 رابط الدعوة:
-{link}
+📥 ارسل أي رابط تحميل
+🤖 أو احچي ويا AI
+
 """
+    bot.send_message(msg.chat.id, text)
 
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-# 🔘 الأزرار
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "video":
-        context.user_data["mode"] = "video"
-        await query.message.reply_text("📥 ارسل رابط الفيديو")
-
-    elif query.data == "audio":
-        context.user_data["mode"] = "audio"
-        await query.message.reply_text("🎵 ارسل الرابط لتحويله صوت")
-
-    elif query.data == "points":
-        user_id = query.from_user.id
-        pts = user_points.get(user_id, 0)
-        refs = referrals.get(user_id, 0)
-
-        await query.message.reply_text(f"""
-💰 نقاطك: {pts}
-👥 عدد الدعوات: {refs}
-""")
-
-# 📥 التحميل
-async def download(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    url = update.message.text
-
-    if is_spam(user_id):
-        await update.message.reply_text("⏳ استنى 10 ثواني")
+# ================= ADMIN PANEL =================
+@bot.message_handler(commands=['admin'])
+def admin_panel(msg):
+    if msg.from_user.id != ADMIN_ID:
         return
 
-    mode = context.user_data.get("mode", "video")
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("📊 الاحصائيات", "➕ اضافة قناة")
+    markup.add("👑 اضافة VIP")
 
-    await update.message.reply_text("⏳ جاري التحميل...")
+    bot.send_message(msg.chat.id, "لوحة تحكم المدير 👑", reply_markup=markup)
 
+# ================= STATS =================
+@bot.message_handler(func=lambda m: m.text == "📊 الاحصائيات")
+def stats(msg):
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    bot.send_message(msg.chat.id, f"""
+👥 المستخدمين: {len(users)}
+👑 VIP: {len(vip_users)}
+📡 القنوات: {len(channels)}
+""")
+
+# ================= ADD CHANNEL =================
+@bot.message_handler(func=lambda m: m.text == "➕ اضافة قناة")
+def add_channel(msg):
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    msg2 = bot.send_message(msg.chat.id, "ارسل معرف القناة:")
+    bot.register_next_step_handler(msg2, save_channel)
+
+def save_channel(msg):
+    channels.append(msg.text)
+    bot.send_message(msg.chat.id, "تم اضافة القناة ✅")
+
+# ================= VIP =================
+@bot.message_handler(func=lambda m: m.text == "👑 اضافة VIP")
+def add_vip(msg):
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    msg2 = bot.send_message(msg.chat.id, "ارسل ID المستخدم:")
+    bot.register_next_step_handler(msg2, save_vip)
+
+def save_vip(msg):
+    vip_users.add(int(msg.text))
+    bot.send_message(msg.chat.id, "تم تفعيل VIP 👑")
+
+# ================= AI =================
+@bot.message_handler(func=lambda m: True)
+def ai_chat(msg):
     try:
-        ydl_opts = {
-            'format': 'best',
-            'outtmpl': 'file.%(ext)s',
-            'noplaylist': True
-        }
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": msg.text}
+            ]
+        )
 
-        # 🎵 صوت فقط
-        if mode == "audio":
-            ydl_opts.update({
-                'format': 'bestaudio',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                }]
-            })
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            file_path = ydl.prepare_filename(info)
-
-            if mode == "audio":
-                file_path = file_path.rsplit(".", 1)[0] + ".mp3"
-
-        with open(file_path, 'rb') as f:
-            if mode == "audio":
-                await update.message.reply_audio(f)
-            else:
-                await update.message.reply_video(f)
+        bot.reply_to(msg, response.choices[0].message.content)
 
     except Exception as e:
-        print(e)
-        await update.message.reply_text("❌ فشل التحميل")
+        bot.reply_to(msg, "⚠️ صار خطأ")
 
-# 📊 عدد المستخدمين
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"👥 المستخدمين: {len(users)}")
-
-# 🏁 تشغيل
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CallbackQueryHandler(buttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
-
-    print("🔥 البوت الخرافي شغال")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+# ================= RUN =================
+print("Bot is running...")
+bot.infinity_polling()
