@@ -5,7 +5,7 @@ import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
-BOT_TOKEN = "PUT_YOUR_TOKEN"
+BOT_TOKEN = "8686945908:AAEfOj2C-MK6oUrjR0Wan-yHBzHU-wPduO8"
 
 users = set()
 referrals = {}
