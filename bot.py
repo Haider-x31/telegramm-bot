@@ -6,7 +6,7 @@ import time
 import random
 
 TOKEN = "8686945908:AAH79liYdVN2fj0fj7LQMKXA3R4xZhFQCRg"
-ADMIN_ID = 5022700372
+ADMIN_ID = "5022700372"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -69,19 +69,19 @@ captcha = {}
 def send_captcha(chat_id, user_id):
     a, b = random.randint(1,9), random.randint(1,9)
     captcha[user_id] = a+b
-    bot.send_message(chat_id, f"🔐 {a}+{b}=?")
+    bot.send_message(chat_id, f"🔐 تحقق:\n{a}+{b}=?")
 
 # ---------------- SPAM ----------------
 last_msg = {}
 def spam(user_id):
     now = time.time()
-    if user_id in last_msg and now-last_msg[user_id] < 2:
+    if user_id in last_msg and now-last_msg[user_id] < 1.5:
         return True
     last_msg[user_id] = now
     return False
 
 # ---------------- MENU ----------------
-def menu(chat_id, user_id):
+def menu(chat_id):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("📥 تحميل","👥 دعواتي")
     kb.add("💰 نقاطي","⭐ VIP")
@@ -95,7 +95,7 @@ def start(msg):
 
     add_user(uid)
 
-    # invite
+    # invite system
     if len(args)>1:
         inviter = int(args[1])
         if inviter != uid:
@@ -103,11 +103,11 @@ def start(msg):
             if not db.fetchone():
                 db.execute("INSERT INTO invites VALUES (?,?)",(uid,inviter))
                 add_points(inviter,1)
-                bot.send_message(inviter,"🎉 +1 نقطة")
+                bot.send_message(inviter,"🎉 تم إضافة نقطة")
 
     send_captcha(msg.chat.id, uid)
 
-# ---------------- HANDLE ----------------
+# ---------------- MAIN ----------------
 @bot.message_handler(func=lambda m: True)
 def all(msg):
     uid = msg.from_user.id
@@ -116,7 +116,7 @@ def all(msg):
     if uid in captcha:
         if text.isdigit() and int(text)==captcha[uid]:
             del captcha[uid]
-            menu(msg.chat.id, uid)
+            menu(msg.chat.id)
         else:
             bot.reply_to(msg,"❌ خطأ")
         return
@@ -125,43 +125,54 @@ def all(msg):
         return
 
     if not is_subscribed(uid) and not is_vip(uid):
-        return bot.reply_to(msg,"❌ اشترك بالقناة")
+        chs = get_channels()
+        kb = types.InlineKeyboardMarkup()
+        for ch in chs:
+            kb.add(types.InlineKeyboardButton("اشترك", url=f"https://t.me/{ch.replace('@','')}"))
+        return bot.send_message(msg.chat.id,"❌ اشترك أولاً",reply_markup=kb)
 
-    # تحميل
+    # ---------------- تحميل ----------------
     if "tiktok.com" in text or "instagram.com" in text:
-        if not is_vip(uid) and get_points(uid)<=0:
+        if not is_vip(uid) and get_points(uid) <= 0:
             return bot.reply_to(msg,"❌ تحتاج نقاط")
 
-        bot.send_message(msg.chat.id,"⏳ تحميل...")
+        bot.send_message(msg.chat.id,"⏳ جاري التحميل...")
 
         try:
+            # TikTok API قوي بدون علامة
             api = f"https://tikwm.com/api/?url={text}"
             r = requests.get(api).json()
             video = r["data"]["play"]
+
             bot.send_video(msg.chat.id, video)
-        except:
-            bot.reply_to(msg,"❌ فشل")
+
+            if not is_vip(uid):
+                add_points(uid, -1)
+
+        except Exception as e:
+            bot.reply_to(msg,"❌ فشل التحميل")
+
         return
 
-    # buttons
+    # ---------------- BUTTONS ----------------
     if text=="💰 نقاطي":
-        bot.reply_to(msg,f"💰 {get_points(uid)}")
+        bot.reply_to(msg,f"💰 نقاطك: {get_points(uid)}")
 
     elif text=="👥 دعواتي":
         db.execute("SELECT COUNT(*) FROM invites WHERE inviter=?", (uid,))
         c = db.fetchone()[0]
-        bot.reply_to(msg,f"👥 {c}")
+        bot.reply_to(msg,f"👥 دعواتك: {c}")
 
     elif text=="⭐ VIP":
         if is_vip(uid):
-            bot.reply_to(msg,"👑 VIP مفعل")
+            bot.reply_to(msg,"👑 انت VIP")
         else:
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton("شراء VIP (25 نقطة)", callback_data="buyvip"))
             bot.send_message(msg.chat.id,"شراء VIP:",reply_markup=kb)
 
     elif text=="📥 تحميل":
-        bot.reply_to(msg,"ارسل الرابط")
+        bot.reply_to(msg,"ارسل رابط الفيديو")
 
 # ---------------- BUY VIP ----------------
 @bot.callback_query_handler(func=lambda c: True)
@@ -172,61 +183,20 @@ def cb(call):
         if get_points(uid) >= 25:
             add_points(uid,-25)
             set_vip(uid,1)
-            bot.answer_callback_query(call.id,"✅ تم")
+            bot.answer_callback_query(call.id,"✅ تم التفعيل")
         else:
-            bot.answer_callback_query(call.id,"❌ نقاطك قليلة")
+            bot.answer_callback_query(call.id,"❌ نقاطك غير كافية")
 
 # ---------------- ADMIN ----------------
-@bot.message_handler(commands=['admin'])
-def admin(msg):
-    if msg.from_user.id != ADMIN_ID:
-        return
-    bot.reply_to(msg,"""
-/addch @channel
-/delch @channel
-/vip id
-/unvip id
-/stats
-""")
-
-@bot.message_handler(commands=['addch'])
-def addch(msg):
-    if msg.from_user.id!=ADMIN_ID: return
-    ch = msg.text.split()[1]
-    db.execute("INSERT INTO channels VALUES (?)",(ch,))
-    conn.commit()
-    bot.reply_to(msg,"✅")
-
-@bot.message_handler(commands=['delch'])
-def delch(msg):
-    if msg.from_user.id!=ADMIN_ID: return
-    ch = msg.text.split()[1]
-    db.execute("DELETE FROM channels WHERE username=?",(ch,))
-    conn.commit()
-    bot.reply_to(msg,"❌")
-
-@bot.message_handler(commands=['vip'])
-def vip(msg):
-    if msg.from_user.id!=ADMIN_ID: return
-    uid=int(msg.text.split()[1])
-    set_vip(uid,1)
-    bot.reply_to(msg,"✅")
-
-@bot.message_handler(commands=['unvip'])
-def unvip(msg):
-    if msg.from_user.id!=ADMIN_ID: return
-    uid=int(msg.text.split()[1])
-    set_vip(uid,0)
-    bot.reply_to(msg,"❌")
-
 @bot.message_handler(commands=['stats'])
 def stats(msg):
-    if msg.from_user.id!=ADMIN_ID: return
+    if msg.from_user.id != ADMIN_ID:
+        return
     db.execute("SELECT COUNT(*) FROM users")
     users = db.fetchone()[0]
     db.execute("SELECT COUNT(*) FROM users WHERE vip=1")
     vip = db.fetchone()[0]
-    bot.reply_to(msg,f"👥 {users}\n⭐ {vip}")
+    bot.reply_to(msg,f"👥 المستخدمين: {users}\n⭐ VIP: {vip}")
 
 print("RUNNING...")
 bot.infinity_polling()
