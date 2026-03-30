@@ -1,109 +1,232 @@
-import os
 import telebot
 from telebot import types
-from openai import OpenAI
+import requests
+import sqlite3
+import time
+import random
 
-# ================= CONFIG =================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+TOKEN = "8686945908:AAH79liYdVN2fj0fj7LQMKXA3R4xZhFQCRg"
+ADMIN_ID = 5022700372
 
-bot = telebot.TeleBot(BOT_TOKEN)
-client = OpenAI(api_key=OPENAI_API_KEY)
+bot = telebot.TeleBot(TOKEN)
 
-users = set()
-channels = []
-vip_users = set()
+# ---------------- DATABASE ----------------
+conn = sqlite3.connect("bot.db", check_same_thread=False)
+db = conn.cursor()
 
-# ================= START =================
+db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, points INTEGER, vip INTEGER)")
+db.execute("CREATE TABLE IF NOT EXISTS invites (user_id INTEGER, inviter INTEGER)")
+db.execute("CREATE TABLE IF NOT EXISTS channels (username TEXT)")
+conn.commit()
+
+# ---------------- FUNCTIONS ----------------
+def get_user(user_id):
+    db.execute("SELECT * FROM users WHERE id=?", (user_id,))
+    return db.fetchone()
+
+def add_user(user_id):
+    if not get_user(user_id):
+        db.execute("INSERT INTO users VALUES (?, ?, ?)", (user_id, 0, 0))
+        conn.commit()
+
+def add_points(user_id, pts):
+    db.execute("UPDATE users SET points = points + ? WHERE id=?", (pts, user_id))
+    conn.commit()
+
+def get_points(user_id):
+    db.execute("SELECT points FROM users WHERE id=?", (user_id,))
+    return db.fetchone()[0]
+
+def set_vip(user_id, val):
+    db.execute("UPDATE users SET vip=? WHERE id=?", (val, user_id))
+    conn.commit()
+
+def is_vip(user_id):
+    db.execute("SELECT vip FROM users WHERE id=?", (user_id,))
+    return db.fetchone()[0] == 1
+
+def get_channels():
+    db.execute("SELECT username FROM channels")
+    return [c[0] for c in db.fetchall()]
+
+# ---------------- SUB ----------------
+def is_subscribed(user_id):
+    channels = get_channels()
+    if not channels:
+        return True
+    for ch in channels:
+        try:
+            status = bot.get_chat_member(ch, user_id).status
+            if status not in ["member","administrator","creator"]:
+                return False
+        except:
+            return True
+    return True
+
+# ---------------- CAPTCHA ----------------
+captcha = {}
+
+def send_captcha(chat_id, user_id):
+    a, b = random.randint(1,9), random.randint(1,9)
+    captcha[user_id] = a+b
+    bot.send_message(chat_id, f"🔐 {a}+{b}=?")
+
+# ---------------- SPAM ----------------
+last_msg = {}
+def spam(user_id):
+    now = time.time()
+    if user_id in last_msg and now-last_msg[user_id] < 2:
+        return True
+    last_msg[user_id] = now
+    return False
+
+# ---------------- MENU ----------------
+def menu(chat_id, user_id):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("📥 تحميل","👥 دعواتي")
+    kb.add("💰 نقاطي","⭐ VIP")
+    bot.send_message(chat_id, "اختر:", reply_markup=kb)
+
+# ---------------- START ----------------
 @bot.message_handler(commands=['start'])
 def start(msg):
-    user_id = msg.from_user.id
-    users.add(user_id)
+    uid = msg.from_user.id
+    args = msg.text.split()
 
-    if user_id in vip_users:
-        status = "VIP 👑"
-    else:
-        status = "عادي"
+    add_user(uid)
 
-    text = f"""
-✨ اهلاً بك في البوت 🔥
+    # invite
+    if len(args)>1:
+        inviter = int(args[1])
+        if inviter != uid:
+            db.execute("SELECT * FROM invites WHERE user_id=?", (uid,))
+            if not db.fetchone():
+                db.execute("INSERT INTO invites VALUES (?,?)",(uid,inviter))
+                add_points(inviter,1)
+                bot.send_message(inviter,"🎉 +1 نقطة")
 
-👤 ID: {user_id}
-⭐ الحالة: {status}
+    send_captcha(msg.chat.id, uid)
 
-📥 ارسل أي رابط تحميل
-🤖 أو احچي ويا AI
+# ---------------- HANDLE ----------------
+@bot.message_handler(func=lambda m: True)
+def all(msg):
+    uid = msg.from_user.id
+    text = msg.text
 
-"""
-    bot.send_message(msg.chat.id, text)
+    if uid in captcha:
+        if text.isdigit() and int(text)==captcha[uid]:
+            del captcha[uid]
+            menu(msg.chat.id, uid)
+        else:
+            bot.reply_to(msg,"❌ خطأ")
+        return
 
-# ================= ADMIN PANEL =================
+    if spam(uid):
+        return
+
+    if not is_subscribed(uid) and not is_vip(uid):
+        return bot.reply_to(msg,"❌ اشترك بالقناة")
+
+    # تحميل
+    if "tiktok.com" in text or "instagram.com" in text:
+        if not is_vip(uid) and get_points(uid)<=0:
+            return bot.reply_to(msg,"❌ تحتاج نقاط")
+
+        bot.send_message(msg.chat.id,"⏳ تحميل...")
+
+        try:
+            api = f"https://tikwm.com/api/?url={text}"
+            r = requests.get(api).json()
+            video = r["data"]["play"]
+            bot.send_video(msg.chat.id, video)
+        except:
+            bot.reply_to(msg,"❌ فشل")
+        return
+
+    # buttons
+    if text=="💰 نقاطي":
+        bot.reply_to(msg,f"💰 {get_points(uid)}")
+
+    elif text=="👥 دعواتي":
+        db.execute("SELECT COUNT(*) FROM invites WHERE inviter=?", (uid,))
+        c = db.fetchone()[0]
+        bot.reply_to(msg,f"👥 {c}")
+
+    elif text=="⭐ VIP":
+        if is_vip(uid):
+            bot.reply_to(msg,"👑 VIP مفعل")
+        else:
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("شراء VIP (25 نقطة)", callback_data="buyvip"))
+            bot.send_message(msg.chat.id,"شراء VIP:",reply_markup=kb)
+
+    elif text=="📥 تحميل":
+        bot.reply_to(msg,"ارسل الرابط")
+
+# ---------------- BUY VIP ----------------
+@bot.callback_query_handler(func=lambda c: True)
+def cb(call):
+    uid = call.from_user.id
+
+    if call.data=="buyvip":
+        if get_points(uid) >= 25:
+            add_points(uid,-25)
+            set_vip(uid,1)
+            bot.answer_callback_query(call.id,"✅ تم")
+        else:
+            bot.answer_callback_query(call.id,"❌ نقاطك قليلة")
+
+# ---------------- ADMIN ----------------
 @bot.message_handler(commands=['admin'])
-def admin_panel(msg):
+def admin(msg):
     if msg.from_user.id != ADMIN_ID:
         return
-
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("📊 الاحصائيات", "➕ اضافة قناة")
-    markup.add("👑 اضافة VIP")
-
-    bot.send_message(msg.chat.id, "لوحة تحكم المدير 👑", reply_markup=markup)
-
-# ================= STATS =================
-@bot.message_handler(func=lambda m: m.text == "📊 الاحصائيات")
-def stats(msg):
-    if msg.from_user.id != ADMIN_ID:
-        return
-
-    bot.send_message(msg.chat.id, f"""
-👥 المستخدمين: {len(users)}
-👑 VIP: {len(vip_users)}
-📡 القنوات: {len(channels)}
+    bot.reply_to(msg,"""
+/addch @channel
+/delch @channel
+/vip id
+/unvip id
+/stats
 """)
 
-# ================= ADD CHANNEL =================
-@bot.message_handler(func=lambda m: m.text == "➕ اضافة قناة")
-def add_channel(msg):
-    if msg.from_user.id != ADMIN_ID:
-        return
+@bot.message_handler(commands=['addch'])
+def addch(msg):
+    if msg.from_user.id!=ADMIN_ID: return
+    ch = msg.text.split()[1]
+    db.execute("INSERT INTO channels VALUES (?)",(ch,))
+    conn.commit()
+    bot.reply_to(msg,"✅")
 
-    msg2 = bot.send_message(msg.chat.id, "ارسل معرف القناة:")
-    bot.register_next_step_handler(msg2, save_channel)
+@bot.message_handler(commands=['delch'])
+def delch(msg):
+    if msg.from_user.id!=ADMIN_ID: return
+    ch = msg.text.split()[1]
+    db.execute("DELETE FROM channels WHERE username=?",(ch,))
+    conn.commit()
+    bot.reply_to(msg,"❌")
 
-def save_channel(msg):
-    channels.append(msg.text)
-    bot.send_message(msg.chat.id, "تم اضافة القناة ✅")
+@bot.message_handler(commands=['vip'])
+def vip(msg):
+    if msg.from_user.id!=ADMIN_ID: return
+    uid=int(msg.text.split()[1])
+    set_vip(uid,1)
+    bot.reply_to(msg,"✅")
 
-# ================= VIP =================
-@bot.message_handler(func=lambda m: m.text == "👑 اضافة VIP")
-def add_vip(msg):
-    if msg.from_user.id != ADMIN_ID:
-        return
+@bot.message_handler(commands=['unvip'])
+def unvip(msg):
+    if msg.from_user.id!=ADMIN_ID: return
+    uid=int(msg.text.split()[1])
+    set_vip(uid,0)
+    bot.reply_to(msg,"❌")
 
-    msg2 = bot.send_message(msg.chat.id, "ارسل ID المستخدم:")
-    bot.register_next_step_handler(msg2, save_vip)
+@bot.message_handler(commands=['stats'])
+def stats(msg):
+    if msg.from_user.id!=ADMIN_ID: return
+    db.execute("SELECT COUNT(*) FROM users")
+    users = db.fetchone()[0]
+    db.execute("SELECT COUNT(*) FROM users WHERE vip=1")
+    vip = db.fetchone()[0]
+    bot.reply_to(msg,f"👥 {users}\n⭐ {vip}")
 
-def save_vip(msg):
-    vip_users.add(int(msg.text))
-    bot.send_message(msg.chat.id, "تم تفعيل VIP 👑")
-
-# ================= AI =================
-@bot.message_handler(func=lambda m: True)
-def ai_chat(msg):
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": msg.text}
-            ]
-        )
-
-        bot.reply_to(msg, response.choices[0].message.content)
-
-    except Exception as e:
-        bot.reply_to(msg, "⚠️ صار خطأ")
-
-# ================= RUN =================
-print("Bot is running...")
+print("RUNNING...")
 bot.infinity_polling()
