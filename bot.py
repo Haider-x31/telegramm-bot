@@ -1,5 +1,4 @@
 import telebot
-from telebot import types
 import requests
 import sqlite3
 import time
