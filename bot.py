@@ -5,7 +5,7 @@ import sqlite3
 import time
 import random
 
-TOKEN = "8686945908:AAH79liYdVN2fj0fj7LQMKXA3R4xZhFQCRg"
+TOKEN = "8686945908:AAFW7CFWmqkZy-qrMQQ4bBqHG4EpFWqIYRM"
 ADMIN_ID = "5022700372"
 
 bot = telebot.TeleBot(TOKEN)
