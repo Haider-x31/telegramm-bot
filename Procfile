@@ -1,1 +1,1 @@
-worker: pip install -r requirements.txt && python bot.py
+worker: python -m pip install --upgrade pip && pip install pyTelegramBotAPI requests && python bot.py
